@@ -1,0 +1,546 @@
+from pathlib import Path
+import hashlib
+import time
+from PyQt6.QtCore import QThread, Qt, pyqtSignal
+from PyQt6.QtGui import QMovie, QPixmap
+from PyQt6.QtWidgets import (
+    QDialog,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QProgressBar,
+    QSpinBox,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+from services.ai_service import AIService
+from services.database_service import DatabaseService
+from services.replicate_service import ReplicateService, StickerGenerateWorker
+from utils.config_manager import ConfigManager
+from utils.file_scanner import FileScanner
+class ConnectionTestThread(QThread):
+    """连接测试"""
+    result = pyqtSignal(bool, str)
+    def __init__(self, test_func, parent=None):
+        super().__init__(parent)
+        self.test_func = test_func
+    def run(self):
+        try:
+            success, message = self.test_func()
+            self.result.emit(success, message)
+        except Exception as exc:
+            self.result.emit(False, str(exc))
+class AIGenerateDialog(QDialog):
+    """AI生图"""
+    def __init__(self, db_service: DatabaseService, parent=None):
+        super().__init__(parent)
+        self.db = db_service
+        self.ai = AIService()
+        self.config = ConfigManager()
+        self.worker = None
+        self.generated_path = None
+        self.sticker_path = None
+        self.sticker_worker = None
+        self.sticker_movie = None
+        self.image_test_thread = None
+        self.gif_test_thread = None
+        self.setWindowTitle("🎨AI生成表情包")
+        self.setObjectName("aiGenerateDialog")
+        self.setMinimumSize(600,730)
+        self._setup_ui()
+        self._load_settings()
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        self.image_tab = QWidget()
+        self.gif_tab = QWidget()
+        self.tabs.addTab(self.image_tab, "🖼生成静图")
+        self.tabs.addTab(self.gif_tab, "🎞生成动图")
+        layout.addWidget(self.tabs)
+        self._setup_image_tab()
+        self._setup_gif_tab()
+    def _setup_image_tab(self):
+        layout = QVBoxLayout(self.image_tab)
+        layout.setSpacing(5)
+        layout.setContentsMargins(10, 10,10,10)
+        prompt_group = QGroupBox("描述你的表情包")
+        prompt_layout = QVBoxLayout()
+        prompt_layout.setSpacing(5)
+        self.prompt_edit = QTextEdit()
+        self.prompt_edit.textChanged.connect(self._on_prompt_changed)
+        prompt_layout.addWidget(self.prompt_edit)
+        self.prompt_counter = QLabel("0/200")
+        self.prompt_counter.setObjectName("hintLabel")
+        self.prompt_counter.setAlignment(Qt.AlignmentFlag.AlignRight)
+        prompt_layout.addWidget(self.prompt_counter)
+        prompt_group.setLayout(prompt_layout)
+        layout.addWidget(prompt_group)
+        settings_group = QGroupBox("生成设置")
+        settings_group.setObjectName("aiSettingsGroup")
+        settings_layout = QFormLayout()
+        settings_layout.setSpacing(5)
+        self.apikey_edit = QLineEdit()
+        self.apikey_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        settings_layout.addRow("API Key:", self.apikey_edit)
+        self.base_url_edit = QLineEdit()
+        settings_layout.addRow("Base URL:", self.base_url_edit)
+        self.model_edit = QLineEdit()
+        settings_layout.addRow("Model:", self.model_edit)
+        self.image_test_btn = QPushButton("测试连接")
+        self.image_test_btn.setObjectName("secondaryButton")
+        self.image_test_btn.clicked.connect(self._test_image_connection)
+        settings_layout.addRow("", self.image_test_btn)
+        self.image_test_result = QLabel("未测试")
+        settings_layout.addRow("状态:", self.image_test_result)
+        size_layout = QHBoxLayout()
+        self.width_spin = QSpinBox()
+        self.width_spin.setRange(256, 1024)
+        self.width_spin.setSingleStep(1)
+        self.width_spin.setValue(512)
+        self.height_spin = QSpinBox()
+        self.height_spin.setRange(256, 1024)
+        self.height_spin.setSingleStep(1)
+        self.height_spin.setValue(512)
+        size_layout.addWidget(QLabel("宽:"))
+        size_layout.addWidget(self.width_spin)
+        size_layout.addWidget(QLabel("高:"))
+        size_layout.addWidget(self.height_spin)
+        settings_layout.addRow("图片尺寸:", size_layout)
+        save_layout = QHBoxLayout()
+        self.save_edit = QLineEdit()
+        self.save_edit.setReadOnly(True)
+        self.browse_btn = QPushButton("浏览...")
+        self.browse_btn.setObjectName("secondaryButton")
+        self.browse_btn.clicked.connect(self._browse_folder)
+        save_layout.addWidget(self.save_edit)
+        save_layout.addWidget(self.browse_btn)
+        settings_layout.addRow("保存到:", save_layout)
+        settings_group.setLayout(settings_layout)
+        layout.addWidget(settings_group)
+        btn_row = QHBoxLayout()
+        self.generate_btn = QPushButton("🖼生成静图")
+        self.generate_btn.setObjectName("primaryButton")
+        self.generate_btn.clicked.connect(self._start_generation)
+        self.stop_btn = QPushButton("⏹停止生成")
+        self.stop_btn.setObjectName("secondaryButton")
+        self.stop_btn.clicked.connect(self._stop_generation)
+        self.stop_btn.setVisible(False)
+        btn_row.addWidget(self.generate_btn)
+        btn_row.addWidget(self.stop_btn)
+        layout.addLayout(btn_row)
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+        layout.addWidget(self.progress)
+        self.status_label = QLabel("就绪")
+        layout.addWidget(self.status_label)
+        preview_group = QGroupBox("预览")
+        preview_layout = QVBoxLayout()
+        self.preview_label = QLabel("生成的图片将在这里预览")
+        self.preview_label.setObjectName("previewPane")
+        self.preview_label.setProperty("hasImage", False)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setMinimumHeight(128)
+        preview_layout.addWidget(self.preview_label)
+        self.import_btn = QPushButton("➕导入到图片库")
+        self.import_btn.setObjectName("primaryButton")
+        self.import_btn.setEnabled(False)
+        self.import_btn.clicked.connect(self._import_generated)
+        preview_layout.addWidget(self.import_btn)
+        preview_group.setLayout(preview_layout)
+        layout.addWidget(preview_group)
+    def _setup_gif_tab(self):
+        layout = QVBoxLayout(self.gif_tab)
+        layout.setSpacing(5)
+        layout.setContentsMargins(10, 10, 10, 10)
+        prompt_group = QGroupBox("描述你的表情包")
+        prompt_layout = QVBoxLayout()
+        prompt_layout.setSpacing(5)
+        self.gif_prompt_edit = QTextEdit()
+        self.gif_prompt_edit.textChanged.connect(self._on_gif_prompt_changed)
+        prompt_layout.addWidget(self.gif_prompt_edit)
+        self.gif_prompt_counter = QLabel("0/200")
+        self.gif_prompt_counter.setObjectName("hintLabel")
+        self.gif_prompt_counter.setAlignment(Qt.AlignmentFlag.AlignRight)
+        prompt_layout.addWidget(self.gif_prompt_counter)
+        prompt_group.setLayout(prompt_layout)
+        layout.addWidget(prompt_group)
+        settings_group = QGroupBox("生成设置")
+        settings_group.setObjectName("aiSettingsGroup")
+        settings_layout = QFormLayout()
+        settings_layout.setSpacing(8)
+        self.gif_apikey_edit = QLineEdit()
+        self.gif_apikey_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        settings_layout.addRow("API Key:", self.gif_apikey_edit)
+        self.gif_base_url_edit = QLineEdit()
+        settings_layout.addRow("Base URL:", self.gif_base_url_edit)
+        self.gif_model_edit = QLineEdit()
+        settings_layout.addRow("Model:", self.gif_model_edit)
+        self.gif_test_btn = QPushButton("测试连接")
+        self.gif_test_btn.setObjectName("secondaryButton")
+        self.gif_test_btn.clicked.connect(self._test_gif_connection)
+        settings_layout.addRow("", self.gif_test_btn)
+        self.gif_test_result = QLabel("未测试")
+        settings_layout.addRow("状态:", self.gif_test_result)
+        gif_save_layout = QHBoxLayout()
+        self.gif_save_edit = QLineEdit()
+        self.gif_save_edit.setReadOnly(True)
+        self.gif_browse_btn = QPushButton("浏览...")
+        self.gif_browse_btn.setObjectName("secondaryButton")
+        self.gif_browse_btn.clicked.connect(self._browse_gif_folder)
+        gif_save_layout.addWidget(self.gif_save_edit)
+        gif_save_layout.addWidget(self.gif_browse_btn)
+        settings_layout.addRow("保存到:", gif_save_layout)
+        settings_group.setLayout(settings_layout)
+        layout.addWidget(settings_group)
+        self.gif_generate_btn = QPushButton("🎞生成动图")
+        self.gif_generate_btn.setObjectName("primaryButton")
+        self.gif_generate_btn.clicked.connect(self._start_sticker_generation)
+        layout.addWidget(self.gif_generate_btn)
+        self.gif_status_label = QLabel("就绪")
+        layout.addWidget(self.gif_status_label)
+        preview_group = QGroupBox("预览")
+        preview_layout = QVBoxLayout()
+        self.gif_preview = QLabel("生成的GIF将在这里预览")
+        self.gif_preview.setObjectName("previewPaneSmall")
+        self.gif_preview.setProperty("hasImage", False)
+        self.gif_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.gif_preview.setMinimumHeight(128)
+        preview_layout.addWidget(self.gif_preview)
+        self.gif_save_btn = QPushButton("➕保存到库")
+        self.gif_save_btn.setObjectName("primaryButton")
+        self.gif_save_btn.setEnabled(False)
+        self.gif_save_btn.clicked.connect(self._import_generated_sticker)
+        preview_layout.addWidget(self.gif_save_btn)
+        preview_group.setLayout(preview_layout)
+        layout.addWidget(preview_group)
+        layout.addStretch()
+    def _limit_text_and_update_counter(self, edit: QTextEdit, counter: QLabel, max_len: int = 200):
+        text = edit.toPlainText()
+        if len(text) > max_len:
+            cursor = edit.textCursor()
+            pos = cursor.position()
+            edit.blockSignals(True)
+            edit.setPlainText(text[:max_len])
+            edit.blockSignals(False)
+            cursor.setPosition(min(pos, max_len))
+            edit.setTextCursor(cursor)
+            text = edit.toPlainText()
+        counter.setText(f"{len(text)}/{max_len}")
+    def _on_prompt_changed(self):
+        self._limit_text_and_update_counter(self.prompt_edit, self.prompt_counter, 200)
+    def _on_gif_prompt_changed(self):
+        self._limit_text_and_update_counter(self.gif_prompt_edit, self.gif_prompt_counter, 200)
+    def _set_has_image(self, label: QLabel, has_image: bool):
+        label.setProperty("hasImage", has_image)
+        label.style().unpolish(label)
+        label.style().polish(label)
+    def _start_connection_test(
+        self,
+        *,
+        thread_attr: str,
+        before_start,
+        test_func,
+        on_result,
+        on_cleanup,
+    ):
+        thread = getattr(self, thread_attr, None)
+        if thread and thread.isRunning():
+            return
+        before_start()
+        thread = ConnectionTestThread(test_func, self)
+        thread.result.connect(on_result)
+        thread.finished.connect(on_cleanup)
+        setattr(self, thread_attr, thread)
+        thread.start()
+    def _browse_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "选择保存文件夹")
+        if folder:
+            self.save_edit.setText(folder)
+            self.config.set("paths.last_export_folder", folder)
+    def _browse_gif_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "选择保存文件夹")
+        if folder:
+            self.gif_save_edit.setText(folder)
+            self.config.set("paths.last_export_folder", folder)
+    def _load_settings(self):
+        last_export_folder = self.config.get("paths.last_export_folder", str(Path.home() / "Desktop"))
+        self.save_edit.setText(last_export_folder)
+        self.gif_save_edit.setText(last_export_folder)
+        cfg = self.config.get_ai_provider_config("custom")
+        self.apikey_edit.setText(cfg.get("api_key", ""))
+        self.base_url_edit.setText(cfg.get("base_url", ""))
+        self.model_edit.setText(cfg.get("model", ""))
+        replicate_cfg = self.config.get_replicate_config()
+        self.gif_apikey_edit.setText(replicate_cfg.get("api_key", ""))
+        self.gif_base_url_edit.setText(replicate_cfg.get("base_url", ""))
+        self.gif_model_edit.setText(replicate_cfg.get("model", ""))
+        self.apikey_edit.textChanged.connect(self._on_provider_field_changed)
+        self.base_url_edit.textChanged.connect(self._on_provider_field_changed)
+        self.model_edit.textChanged.connect(self._on_provider_field_changed)
+        self.gif_apikey_edit.textChanged.connect(self._on_replicate_field_changed)
+        self.gif_base_url_edit.textChanged.connect(self._on_replicate_field_changed)
+        self.gif_model_edit.textChanged.connect(self._on_replicate_field_changed)
+    def _on_provider_field_changed(self):
+        self.config.set_ai_provider_config(
+            "custom",
+            api_key=self.apikey_edit.text().strip(),
+            model=self.model_edit.text().strip(),
+            base_url=self.base_url_edit.text().strip(),
+            enabled=True,
+        )
+        self.config.set("ai_providers.active", "custom")
+    def _on_replicate_field_changed(self):
+        self.config.set_replicate_config(
+            base_url=self.gif_base_url_edit.text().strip(),
+            api_key=self.gif_apikey_edit.text().strip(),
+            model=self.gif_model_edit.text().strip(),
+        )
+    def _test_image_connection(self):
+        self._on_provider_field_changed()
+        base_url = self.base_url_edit.text().strip().rstrip("/")
+        api_key = self.apikey_edit.text().strip()
+        def before():
+            self.image_test_btn.setEnabled(False)
+            self.image_test_result.setText("测试中...")
+            self.image_test_result.setStyleSheet("")
+            self.image_test_result.setToolTip("")
+        def test_connection():
+            return self.ai.providers["custom"].test_connection(base_url, api_key)
+        self._start_connection_test(
+            thread_attr="image_test_thread",
+            before_start=before,
+            test_func=test_connection,
+            on_result=self._on_image_test_result,
+            on_cleanup=self._cleanup_image_test_thread,
+        )
+    def _cleanup_image_test_thread(self):
+        self.image_test_thread = None
+    def _on_image_test_result(self, success: bool, message: str):
+        self.image_test_btn.setEnabled(True)
+        if success:
+            self.image_test_result.setText("✅连接成功")
+            self.image_test_result.setStyleSheet("color: #51cf66;")
+            self.image_test_result.setToolTip("")
+        else:
+            self.image_test_result.setText("❌连接失败")
+            self.image_test_result.setStyleSheet("color: #ff6b6b;")
+            self.image_test_result.setToolTip(message)
+    def _test_gif_connection(self):
+        self._on_replicate_field_changed()
+        base_url = self.gif_base_url_edit.text().strip()
+        api_key = self.gif_apikey_edit.text().strip()
+        model = self.gif_model_edit.text().strip() or "fofr/sticker-maker"
+        def before():
+            self.gif_test_btn.setEnabled(False)
+            self.gif_test_result.setText("测试中...")
+            self.gif_test_result.setStyleSheet("")
+            self.gif_test_result.setToolTip("")
+        def test_connection():
+            service = ReplicateService(base_url=base_url, api_key=api_key, model=model)
+            return service.test_connection()
+        self._start_connection_test(
+            thread_attr="gif_test_thread",
+            before_start=before,
+            test_func=test_connection,
+            on_result=self._on_gif_test_result,
+            on_cleanup=self._cleanup_gif_test_thread,
+        )
+    def _cleanup_gif_test_thread(self):
+        self.gif_test_thread = None
+    def _on_gif_test_result(self, success: bool, message: str):
+        self.gif_test_btn.setEnabled(True)
+        if success:
+            self.gif_test_result.setText("✅连接成功")
+            self.gif_test_result.setStyleSheet("color: #51cf66;")
+            self.gif_test_result.setToolTip("")
+        else:
+            self.gif_test_result.setText("❌连接失败")
+            self.gif_test_result.setStyleSheet("color: #ff6b6b;")
+            self.gif_test_result.setToolTip(message)
+    def _start_generation(self):
+        prompt = self.prompt_edit.toPlainText().strip()
+        if not prompt:
+            QMessageBox.warning(self, "提示", "请输入图片描述")
+            return
+        save_dir = self.save_edit.text().strip()
+        if not save_dir:
+            QMessageBox.warning(self, "提示", "请选择保存文件夹")
+            return
+        filename = f"ai_{hashlib.md5(f'{prompt}:{time.time()}'.encode()).hexdigest()[:8]}.png"
+        save_path = str(Path(save_dir) / filename)
+        provider = "custom"
+        self._on_provider_field_changed()
+        self.config.set("ai.provider", provider)
+        self.config.set("ai_providers.active", provider)
+        self.progress.setVisible(True)
+        self.progress.setRange(0, 0)
+        self.generate_btn.setEnabled(False)
+        self.stop_btn.setVisible(True)
+        self.import_btn.setEnabled(False)
+        self.preview_label.setText("生成中...")
+        self.preview_label.setPixmap(QPixmap())
+        self._set_has_image(self.preview_label, False)
+        self.status_label.setText("正在连接AI并生成图片，请稍候…")
+        self.worker = self.ai.generate_image(
+            prompt=prompt,
+            save_path=save_path,
+            width=self.width_spin.value(),
+            height=self.height_spin.value(),
+            provider=provider,
+            api_key=self.apikey_edit.text().strip(),
+            model=self.model_edit.text().strip(),
+            base_url=self.base_url_edit.text().strip(),
+            progress_callback=self._on_progress,
+            finished_callback=self._on_finished,
+            error_callback=self._on_error,
+        )
+    def _stop_generation(self):
+        if self.worker and self.worker.isRunning():
+            self.worker.requestInterruption()
+            self.worker.wait(1000)
+        self._reset_generate_ui()
+        self.status_label.setText("已停止生成")
+    def _reset_generate_ui(self):
+        self.progress.setVisible(False)
+        self.generate_btn.setEnabled(True)
+        self.stop_btn.setVisible(False)
+    def _on_progress(self, msg: str):
+        self.status_label.setText(msg)
+    def _on_finished(self, save_path: str):
+        self.generated_path = save_path
+        self._reset_generate_ui()
+        self.import_btn.setEnabled(True)
+        self.status_label.setText("生成成功")
+        pixmap = QPixmap(save_path)
+        if not pixmap.isNull():
+            scaled = pixmap.scaled(
+                self.preview_label.width() - 10,
+                self.preview_label.height() - 10,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self.preview_label.setPixmap(scaled)
+            self._set_has_image(self.preview_label, True)
+        QMessageBox.information(self, "完成", "图片生成成功！")
+    def _on_error(self, _error_msg: str):
+        self._reset_generate_ui()
+        self.status_label.setText("⚠️AI连接失败，请检查设置")
+        self.preview_label.setText("生成失败")
+        self._set_has_image(self.preview_label, False)
+        QMessageBox.critical(self, "生成失败", "⚠️AI连接失败，请检查设置")
+    def _start_sticker_generation(self):
+        prompt = self.gif_prompt_edit.toPlainText().strip()
+        if not prompt:
+            QMessageBox.warning(self, "提示", "请输入动图描述")
+            return
+        save_dir = self.gif_save_edit.text().strip()
+        if not save_dir:
+            QMessageBox.warning(self, "提示", "请选择保存文件夹")
+            return
+        self._on_replicate_field_changed()
+        base_url = self.gif_base_url_edit.text().strip()
+        api_key = self.gif_apikey_edit.text().strip()
+        model = self.gif_model_edit.text().strip() or "fofr/sticker-maker"
+        if not base_url or not api_key:
+            QMessageBox.warning(
+                self,
+                "配置缺失",
+                "请先在生成设置中填写 Base URL 和 API Key，并测试连接。",
+            )
+            return
+        filename = f"sticker_{hashlib.md5(f'{prompt}:{time.time()}'.encode()).hexdigest()[:8]}.gif"
+        output_path = str(Path(save_dir) / filename)
+        service = ReplicateService(base_url=base_url, api_key=api_key, model=model)
+        self.gif_generate_btn.setEnabled(False)
+        self.gif_save_btn.setEnabled(False)
+        self.gif_preview.setText("正在生成 GIF...")
+        self.gif_preview.setToolTip("")
+        self.gif_status_label.setText("正在提交任务…")
+        self.sticker_worker = StickerGenerateWorker(
+            service=service,
+            prompt=prompt,
+            output_path=output_path,
+            timeout=300,
+            parent=self,
+        )
+        self.sticker_worker.progress.connect(self._on_sticker_progress)
+        self.sticker_worker.finished.connect(self._on_sticker_finished)
+        self.sticker_worker.error.connect(self._on_sticker_error)
+        self.sticker_worker.finished.connect(lambda _: self._on_sticker_done())
+        self.sticker_worker.error.connect(lambda _: self._on_sticker_done())
+        self.sticker_worker.start()
+    def _on_sticker_progress(self, message: str):
+        self.gif_status_label.setText(message)
+    def _on_sticker_finished(self, gif_path: str):
+        self.sticker_path = gif_path
+        self.gif_status_label.setText("动图生成成功")
+        self.gif_save_btn.setEnabled(True)
+        if self.sticker_movie:
+            self.sticker_movie.stop()
+            self.sticker_movie = None
+        self.sticker_movie = QMovie(gif_path)
+        if self.sticker_movie.isValid():
+            self.gif_preview.setMovie(self.sticker_movie)
+            self._set_has_image(self.gif_preview, True)
+            self.sticker_movie.start()
+        else:
+            pixmap = QPixmap(gif_path)
+            self.gif_preview.setPixmap(pixmap)
+            self._set_has_image(self.gif_preview, True)
+
+        QMessageBox.information(self, "完成", "动图生成成功！")
+    def _on_sticker_error(self, message: str):
+        self.gif_status_label.setText("生成失败")
+        self.gif_preview.setText("生成失败")
+        self._set_has_image(self.gif_preview, False)
+        self.gif_preview.setToolTip(message)
+        QMessageBox.critical(self, "生成失败", message)
+    def _on_sticker_done(self):
+        self.gif_generate_btn.setEnabled(True)
+        self.sticker_worker = None
+    def _import_media_to_db(self, path: str, *, name_prefix: str = ""):
+        if not path or not Path(path).exists():
+            QMessageBox.warning(self, "错误", "没有可导入的文件")
+            return
+        info = FileScanner.get_image_info(path)
+        if not info:
+            QMessageBox.warning(self, "错误", "读取文件信息失败")
+            return
+        if name_prefix:
+            info["name"] = f"{name_prefix}{info['name'][:20]}"
+        image_id = self.db.add_image(**info)
+        if image_id:
+            QMessageBox.information(self, "成功", f"已导入到图片库 (ID: {image_id})")
+        else:
+            QMessageBox.warning(self, "提示", "导入失败")
+    def _import_generated(self):
+        self._import_media_to_db(self.generated_path, name_prefix="AI_")
+        self.config.increment_stat("total_imported")
+    def _import_generated_sticker(self):
+        self._import_media_to_db(self.sticker_path)
+    def closeEvent(self, event):
+        if self.worker and self.worker.isRunning():
+            reply = QMessageBox.question(
+                self,
+                "确认",
+                "生成正在进行中，确定要取消吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.worker.requestInterruption()
+                self.worker.wait(2000)
+            else:
+                event.ignore()
+                return
+        if self.sticker_worker and self.sticker_worker.isRunning():
+            QMessageBox.warning(self, "提示", "动图正在生成中，请稍候完成后再关闭窗口")
+            event.ignore()
+            return
+        event.accept()
