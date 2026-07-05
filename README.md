@@ -142,8 +142,7 @@ cd emoji-workshop
 ```
 
 ### 2. 安装依赖
-
-当前仓库根目录下暂未提供 `requirements.txt` 或 `pyproject.toml`。  
+  
 根据现有代码，项目运行所需的核心依赖主要有：
 
 - `PyQt6`：桌面图形界面
