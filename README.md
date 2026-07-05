@@ -1,72 +1,90 @@
-# 😊 表情工坊 · emoji_workshop
-> 一个基于 **PyQt6** 的表情包管理与智能辅助工具  
-> 为高频社交图片使用场景打造的桌面端解决方案
-<p align="center">
-  <img alt="Python" src="https://img.shields.io/badge/Python-100%25-blue">
-  <img alt="GUI" src="https://img.shields.io/badge/GUI-PyQt6-green">
-  <img alt="Platform" src="https://img.shields.io/badge/Platform-Desktop-orange">
-  <img alt="Project Type" src="https://img.shields.io/badge/Project-Course%20Project-purple">
-</p>
----
 ## 📌 项目简介
+
 **表情工坊（Emoji Workshop）** 是一个面向日常线上社交场景的桌面应用。  
-它帮助用户对本地表情包、图片等视觉内容进行**统一管理、标签分类、快速检索、智能推荐与个性化生成**。
+它帮助用户对本地表情包、图片等视觉内容进行 **统一管理、标签分类、快速检索、智能推荐与个性化生成**。
+
 在聊天中，我们常常会遇到这些问题：
+
 - 表情包越存越多，找图越来越难
 - 没有系统分类，想发的时候总翻不到
 - 想更快把图片发送到聊天窗口
 - 想根据当前语境找到“最合适”、“最恰当”的表情包
 - 想自己生成更有个性的专属表情
 - 想看看自己的表情使用习惯和风格画像
+
 **表情工坊** 就是为这些需求而设计的。
+
 ---
+
 ## ✨ 核心功能
+
 ### 🗂️ 1. 图库管理
+
 - 统一管理本地表情包与图片资源
 - 支持静态图片与动态图内容
 - 通过图形化界面快速浏览图库
 - 提升大量表情包的整理效率
+
 ### 🏷️ 2. 标签分类
+
 - 为图片添加标签
 - 通过标签组织内容
 - 支持基于标签进行筛选与检索
 - 帮助构建系统化、规范化的图片管理方式
+
 ### 📋 3. 快速复制与剪贴板联动
+
 - 支持将图片快速复制到剪贴板
 - 方便用户在聊天软件中直接发送
 - 支持检测剪贴板中的新图片并选择是否加入图库
+
 ### 🤖 4. 智能推荐
+
 - 根据语境或使用需求推荐合适的表情包
 - 适用于“想回复但不知道发什么图”的社交场景
 - 提升聊天表达效率与趣味性
+
 ### 🎨 5. AI 生成表情包
+
 - 支持通过 AI 能力生成个性化图片或表情内容
 - 帮助用户打造更有个人风格的专属表情包
+
 ### 📊 6. 数据统计与报告
+
 - 提供数据统计面板
 - 支持生成个性化使用分析
 - 从使用记录中观察自己的表达偏好与风格特征
+
 ### ⚙️ 7. 设置与体验优化
+
 - 支持界面设置与窗口状态保存
 - 支持缩略图等显示体验调整
 - 提升桌面应用的整体使用流畅度
+
 ---
+
 ## 🧱 项目结构
+
 ```text
 emoji-workshop/
 ├── controllers/   # 控制层：AI、推荐、报告等业务控制逻辑
 ├── models/        # 数据模型：图片、标签等核心对象
-├── resources/     # 资源文件：图标、样式等，和ui设置紧密相关
+├── resources/     # 资源文件：图标、样式等，和 UI 设置紧密相关
 ├── services/      # 服务层：数据库、剪贴板、AI、缩略图、视觉分析等
 ├── utils/         # 工具模块：配置管理、文件扫描等
 ├── views/         # 界面层：图库、标签、推荐、统计、设置等
 ├── main.py        # 程序入口
 └── .gitignore
 ```
+
 ---
+
 ## 🖼️ 界面与模块概览
+
 从当前仓库结构可以看出，项目采用了较清晰的分层设计，主要包括以下部分：
+
 ### `views/`：界面层
+
 - `gallery_view.py`：图库展示
 - `tag_panel.py`：标签面板
 - `stats_panel.py`：统计面板
@@ -74,73 +92,109 @@ emoji-workshop/
 - `settings_dialog.py`：设置界面
 - `ai_generate_dialog.py`：AI 生成界面
 - `report_view.py`：报告展示界面
+
 ### `services/`：服务层
+
 - `database_service.py`：数据库操作
 - `clipboard_monitor.py` / `clipboard_service.py`：剪贴板相关功能
 - `thumbnail_service.py`：缩略图处理
 - `ai_service.py` / `llm_service.py`：AI 与大模型能力支持
 - `vision_service.py`：视觉分析能力
 - `replicate_service.py`：外部 AI 接口支持
-- `personality_service.py`：画像/报告相关能力
+- `personality_service.py`：画像 / 报告相关能力
 - `network_monitor.py`：网络状态监测
+
 ### `controllers/`：控制层
+
 - `ai_controller.py`
 - `recommend_controller.py`
 - `report_controller.py`
+
 ### `models/`：数据模型
+
 - `image_model.py`
 - `tag_model.py`
+
 ### `utils/`：工具层
+
 - `config_manager.py`
 - `file_scanner.py`
+
 ---
+
 ## 🚀 技术栈
+
 - **Python**
 - **PyQt6**
 - 桌面 GUI 开发
 - 面向对象程序设计
 - 模块化架构组织
+
 ---
+
 ## ▶️ 运行方式
+
 ### 1. 克隆仓库
+
 ```bash
 git clone <your-repo-url>
 cd emoji-workshop
 ```
+
 ### 2. 安装依赖
+
 当前仓库根目录下暂未提供 `requirements.txt` 或 `pyproject.toml`。  
 根据现有代码，项目运行所需的核心依赖主要有：
+
 - `PyQt6`：桌面图形界面
 - `Pillow`：图片读取与处理
 - `requests`：网络请求与 AI 接口调用
+
 你可以先手动安装这些依赖：
+
 ```bash
 pip install PyQt6 Pillow requests
 ```
+
 ### 3. 启动项目
+
 ```bash
 python main.py
 ```
+
 ---
+
 ## 🎯 适用人群
+
 本项目适合：
+
 - 经常使用表情包进行线上交流的用户
-- 有大量图片/表情资源需要整理的人
+- 有大量图片 / 表情资源需要整理的人
 - 希望提高图片检索和发送效率的人
 - 对 AI 表情生成与推荐感兴趣的用户
 - 希望学习 **PyQt6 + 面向对象设计 + GUI 项目组织** 的同学
+
 ---
+
 ## 💡 项目亮点
+
 - 聚焦真实社交场景，应用导向明确
-- 将**管理、推荐、生成、分析**整合到一个桌面项目中
+- 将 **管理、推荐、生成、分析** 整合到一个桌面项目中
 - 同时覆盖 GUI、数据管理、AI 接入与模块化设计
 - 适合作为课程设计、桌面开发实践和作品集项目展示
+
 ---
+
 ## 🎓 项目背景
-本项目为北京大学《程序设计实习》课程大作业，赛道为**生活类**。  
+
+本项目为北京大学《程序设计实习》课程大作业，赛道为 **生活类**。  
 它是一次围绕实际用户需求展开的桌面应用尝试，也是一次面向对象程序设计与 GUI 开发的综合实践。
+
 ---
+
 ## 📬 结语
+
 如果你也曾因为“表情包太多找不到图”而苦恼，  
 希望 **表情工坊** 能为你的线上表达带来一点效率，也带来一点乐趣。
+
 欢迎交流、改进与继续完善这个项目 ✨
