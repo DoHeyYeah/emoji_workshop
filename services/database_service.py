@@ -14,15 +14,18 @@ class DatabaseService:
 
     def __init__(self, db_path: str = None):
         if db_path is None:
-            # 数据库放在项目根目录（emoji_workshop/）
-            project_root = Path(__file__).parent.parent.parent
+            # database_service.py 位于 <repo>/services/
+            # parent.parent 才是项目根目录 <repo>
+            project_root = Path(__file__).resolve().parent.parent
             db_path = str(project_root / "emoji_workshop.db")
         self.db_path = db_path
         self._init_database()
         self.ensure_usage_history_table()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
 
     def _init_database(self):
         """初始化数据库表结构（IF NOT EXISTS 保证升级安全）"""
